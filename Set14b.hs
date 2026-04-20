@@ -76,12 +76,15 @@ getAllQuery = Query (T.pack "SELECT account, amount FROM events;")
 -- NOTE! Do not add anything to the name, otherwise you'll get weird
 -- test failures later.
 openDatabase :: String -> IO Connection
-openDatabase = todo
+openDatabase tableName = do
+  db <- open tableName
+  execute_ db initQuery
+  return db
 
 -- given a db connection, an account name, and an amount, deposit
 -- should add an (account, amount) row into the database
 deposit :: Connection -> T.Text -> Int -> IO ()
-deposit = todo
+deposit db account amount = execute db depositQuery (account,amount)
 
 ------------------------------------------------------------------------------
 -- Ex 2: Fetching an account's balance. Below you'll find
@@ -112,7 +115,7 @@ balanceQuery :: Query
 balanceQuery = Query (T.pack "SELECT amount FROM events WHERE account = ?;")
 
 balance :: Connection -> T.Text -> IO Int
-balance = todo
+balance db account = sum . concat <$> query db balanceQuery [account]
 
 ------------------------------------------------------------------------------
 -- Ex 3: Now that we have the database part covered, let's think about
@@ -144,14 +147,19 @@ balance = todo
 --   parseCommand [T.pack "deposit", T.pack "madoff", T.pack "123456"]
 --     ==> Just (Deposit "madoff" 123456)
 
-data Command = Deposit T.Text Int | Balance T.Text
+data Command = Deposit T.Text Int | Balance T.Text | Withdraw T.Text Int
   deriving (Show, Eq)
 
 parseInt :: T.Text -> Maybe Int
 parseInt = readMaybe . T.unpack
 
 parseCommand :: [T.Text] -> Maybe Command
-parseCommand = todo
+parseCommand [command, account]
+  | command == T.pack "balance" = Just (Balance account)
+parseCommand [command, account, amount]
+  | command == T.pack "deposit"  = Deposit account <$> parseInt amount
+  | command == T.pack "withdraw" = Withdraw account <$> parseInt amount
+parseCommand _ = Nothing
 
 ------------------------------------------------------------------------------
 -- Ex 4: Running commands. Implement the IO operation perform that takes a
@@ -177,7 +185,11 @@ parseCommand = todo
 --   "0"
 
 perform :: Connection -> Maybe Command -> IO T.Text
-perform = todo
+perform db mCommand = case mCommand of
+  Just (Balance account)         -> T.pack . show <$> balance db account
+  Just (Deposit account amount)  -> deposit db account amount >> return (T.pack "OK")
+  Just (Withdraw account amount) -> deposit db account (-amount) >> return (T.pack "OK")
+  _ -> return (T.pack "ERROR") 
 
 ------------------------------------------------------------------------------
 -- Ex 5: Next up, let's set up a simple HTTP server. Implement a WAI
@@ -197,7 +209,7 @@ encodeResponse t = LB.fromStrict (encodeUtf8 t)
 -- Remember:
 -- type Application = Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 simpleServer :: Application
-simpleServer request respond = todo
+simpleServer request respond = respond (responseLBS status200 [] (encodeResponse $ T.pack "BANK"))
 
 ------------------------------------------------------------------------------
 -- Ex 6: Now we finally have all the pieces we need to actually
@@ -226,7 +238,9 @@ simpleServer request respond = todo
 -- Remember:
 -- type Application = Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 server :: Connection -> Application
-server db request respond = todo
+server db request respond = do
+  result <- perform db (parseCommand $ pathInfo request)
+  respond (responseLBS status200 [] (encodeResponse result))
 
 port :: Int
 port = 3421
